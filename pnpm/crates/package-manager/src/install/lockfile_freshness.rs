@@ -20,6 +20,7 @@ pub(crate) use settings::{
 };
 
 mod directory_manifests;
+mod normalized_manifests;
 
 use rayon::prelude::*;
 
@@ -27,6 +28,7 @@ use super::{
     Arc, Catalogs, Config, Lockfile, PackageManifest, Path, PathBuf, StalenessReason,
     build_project_manifests_list, configured_or_discovered_workspace_dir,
 };
+use normalized_manifests::{compared_manifests, override_normalized_manifests};
 
 /// Inputs for [`wanted_lockfile_satisfies_workspace`].
 pub struct WantedLockfileSatisfactionCheck<'a> {
@@ -231,9 +233,18 @@ pub(super) async fn try_fast_update_lockfile<Reporter: pnpm_reporter::Reporter>(
     let Ok(patch_hashes) = opts.freshness.config.patched_dependency_hashes() else {
         return None;
     };
+    // The lockfile records an overridden dependency by its override, so the
+    // drift is read from the manifests the way the freshness check reads them.
+    // Compared as declared, every overridden dependency would read as drift
+    // the compose cannot absorb.
+    let parsed_overrides =
+        parse_config_overrides(opts.freshness.config, opts.freshness.catalogs).ok()?;
+    let overrider = settings::freshness_overrider(&opts.freshness, parsed_overrides.as_deref());
+    let normalized = override_normalized_manifests(opts.freshness.manifests, overrider.as_deref());
+    let manifests = compared_manifests(opts.freshness.manifests, normalized.as_deref());
     let candidate = crate::fast_update_compose::try_compose_fast_updates(
         lockfile,
-        opts.freshness.manifests,
+        &manifests,
         opts.project_manifests,
         opts.freshness.config,
         patch_hashes.as_ref(),

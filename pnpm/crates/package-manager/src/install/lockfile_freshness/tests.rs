@@ -1,9 +1,15 @@
 use super::{WantedLockfileSatisfactionCheck, wanted_lockfile_satisfies_workspace};
+use indexmap::IndexMap;
 use pnpm_catalogs_types::Catalogs;
 use pnpm_config::Config;
 use pnpm_lockfile::Lockfile;
 use pnpm_package_manifest::PackageManifest;
-use std::fs;
+use pnpm_reporter::SilentReporter;
+use serde_json::json;
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 use tempfile::tempdir;
 
 pub(crate) async fn check_frozen_fixture(
@@ -213,4 +219,81 @@ importers:
         ),
         "expected only is-odd reported as added, got {error:?}",
     );
+}
+
+/// `foo` is recorded by its override and `bar` is the dependency the manifest
+/// dropped.
+const OVERRIDDEN_LOCKFILE: &str = r"
+lockfileVersion: '9.0'
+overrides:
+  foo: 2.0.0
+importers:
+  .:
+    dependencies:
+      foo:
+        specifier: 2.0.0
+        version: 2.0.0
+      bar:
+        specifier: ^1.0.0
+        version: 1.0.0
+packages:
+  foo@2.0.0:
+    resolution:
+      integrity: sha512-foo
+  bar@1.0.0:
+    resolution:
+      integrity: sha512-bar
+snapshots:
+  foo@2.0.0: {}
+  bar@1.0.0: {}
+";
+
+#[tokio::test]
+async fn fast_update_reads_the_manifests_with_the_overrides_applied() {
+    let manifest = PackageManifest::from_value(
+        PathBuf::from("/project/package.json"),
+        json!({ "name": "root", "dependencies": { "foo": "^1.0.0" } }),
+    );
+    let mut config = Config::new();
+    config.ignore_pnpmfile = true;
+    config.overrides = Some(IndexMap::from([("foo".to_string(), "2.0.0".to_string())]));
+    let lockfile: Lockfile = serde_saphyr::from_str(OVERRIDDEN_LOCKFILE).expect("parse lockfile");
+    let manifests = [(".".to_string(), &manifest)];
+    let project_manifests = [(PathBuf::from("/project"), &manifest)];
+    let catalogs = Catalogs::new();
+
+    let updated =
+        super::try_fast_update_lockfile::<SilentReporter>(super::FastUpdateLockfileOptions {
+            lockfile: Some(&lockfile),
+            project_manifests: &project_manifests,
+            freshness: super::LockfileFreshnessInputs {
+                lockfile_dir: Path::new("/project"),
+                manifests: &manifests,
+                workspace_packages: None,
+                dependency_manifests: super::DependencyManifestSources {
+                    declared: &project_manifests,
+                    injected: None,
+                },
+                config: &config,
+                catalogs: &catalogs,
+                pnpmfile_hook: None,
+                scope: super::FreshnessScope {
+                    ignore_manifest_check: false,
+                    allow_missing_dependency_free_importers: false,
+                    frozen_lockfile: false,
+                    prune_stale_importers: true,
+                    patches_only: false,
+                    locked_registries: None,
+                },
+            },
+        })
+        .await
+        .expect("the removal is absorbed once `foo` reads as its override");
+
+    let snapshots = updated.snapshots.expect("snapshots");
+    let keys: Vec<_> = snapshots
+        .keys()
+        .map(ToString::to_string)
+        .collect();
+    assert_eq!(keys, vec!["foo@2.0.0".to_string()]);
 }
