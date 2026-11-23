@@ -1,7 +1,7 @@
 use super::{
     super::{
         Arc, FastUpdateLockfileOptions, FreshnessScope, InstallError, Lockfile, PackageManifest,
-        Path, PathBuf, Reporter, check_lockfile_freshness,
+        Path, PathBuf, Reporter, ThrottledClient, check_lockfile_freshness,
         lockfile_freshness::{DependencyManifestSources, LockfileFreshnessInputs},
         prune_merged_branch_lockfile, try_fast_update_lockfile,
     },
@@ -96,11 +96,11 @@ impl<'a> Lockfiles<'a> {
 pub(super) async fn settle_wanted_lockfile<'a: 'w, 'w, Reporter: self::Reporter + 'static>(
     install: InstallView<'a>,
     mode: &RunMode,
-    workspace: &InstallWorkspace<'_>,
-    scope: &InstallScope<'_>,
+    (workspace, scope): (&InstallWorkspace<'_>, &InstallScope<'_>),
     loaded: &Loaded<'a>,
     project_manifests: &'w [(PathBuf, &'w PackageManifest)],
     selection: Option<&crate::WorkspaceInstallSelection<'_>>,
+    http_client: Option<Arc<ThrottledClient>>,
 ) -> Result<Lockfiles<'w>, InstallError> {
     let mut lockfiles = Lockfiles::new(
         loaded.wanted.lockfile,
@@ -129,6 +129,7 @@ pub(super) async fn settle_wanted_lockfile<'a: 'w, 'w, Reporter: self::Reporter 
                     loaded,
                     &lockfiles.manifest_freshness_inputs,
                 ),
+                http_client,
             })
             .await;
     }

@@ -320,11 +320,11 @@ impl<'a> RunExecution<'a> {
         let mut lockfiles = settle_wanted_lockfile::<SilentReporter>(
             self.install,
             &self.mode,
-            &self.workspace,
-            scope,
+            (&self.workspace, scope),
             loaded,
             project_manifests,
             self.options.selection.as_ref(),
+            None,
         )
         .await?;
         let verification = Verification::set_up(&self, &lockfiles, (scope, project_manifests))?;

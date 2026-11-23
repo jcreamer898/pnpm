@@ -3,12 +3,14 @@ use indexmap::IndexMap;
 use pnpm_catalogs_types::Catalogs;
 use pnpm_config::Config;
 use pnpm_lockfile::Lockfile;
+use pnpm_network::ThrottledClient;
 use pnpm_package_manifest::PackageManifest;
 use pnpm_reporter::SilentReporter;
 use serde_json::json;
 use std::{
     fs,
     path::{Path, PathBuf},
+    sync::Arc,
 };
 use tempfile::tempdir;
 
@@ -248,6 +250,57 @@ snapshots:
   bar@1.0.0: {}
 ";
 
+/// Run the fast update of `lockfile` for `manifest`, with `http_client` as the
+/// client for registry lookups.
+async fn fast_update(
+    lockfile: &Lockfile,
+    manifest: &PackageManifest,
+    config: &Config,
+    http_client: Option<Arc<ThrottledClient>>,
+) -> Option<Lockfile> {
+    let manifests = [(".".to_string(), manifest)];
+    let project_manifests = [(PathBuf::from("/project"), manifest)];
+    let catalogs = Catalogs::new();
+
+    super::try_fast_update_lockfile::<SilentReporter>(super::FastUpdateLockfileOptions {
+        lockfile: Some(lockfile),
+        project_manifests: &project_manifests,
+        freshness: super::LockfileFreshnessInputs {
+            lockfile_dir: Path::new("/project"),
+            manifests: &manifests,
+            workspace_packages: None,
+            dependency_manifests: super::DependencyManifestSources {
+                declared: &project_manifests,
+                injected: None,
+            },
+            config,
+            catalogs: &catalogs,
+            pnpmfile_hook: None,
+            scope: super::FreshnessScope {
+                ignore_manifest_check: false,
+                allow_missing_dependency_free_importers: false,
+                frozen_lockfile: false,
+                prune_stale_importers: true,
+                patches_only: false,
+                locked_registries: None,
+            },
+        },
+        http_client,
+    })
+    .await
+}
+
+fn sorted_snapshot_keys(lockfile: &Lockfile) -> Vec<String> {
+    let mut keys: Vec<String> = lockfile.snapshots
+        .as_ref()
+        .expect("snapshots")
+        .keys()
+        .map(ToString::to_string)
+        .collect();
+    keys.sort();
+    keys
+}
+
 #[tokio::test]
 async fn fast_update_reads_the_manifests_with_the_overrides_applied() {
     let manifest = PackageManifest::from_value(
@@ -258,42 +311,91 @@ async fn fast_update_reads_the_manifests_with_the_overrides_applied() {
     config.ignore_pnpmfile = true;
     config.overrides = Some(IndexMap::from([("foo".to_string(), "2.0.0".to_string())]));
     let lockfile: Lockfile = serde_saphyr::from_str(OVERRIDDEN_LOCKFILE).expect("parse lockfile");
-    let manifests = [(".".to_string(), &manifest)];
-    let project_manifests = [(PathBuf::from("/project"), &manifest)];
-    let catalogs = Catalogs::new();
 
-    let updated =
-        super::try_fast_update_lockfile::<SilentReporter>(super::FastUpdateLockfileOptions {
-            lockfile: Some(&lockfile),
-            project_manifests: &project_manifests,
-            freshness: super::LockfileFreshnessInputs {
-                lockfile_dir: Path::new("/project"),
-                manifests: &manifests,
-                workspace_packages: None,
-                dependency_manifests: super::DependencyManifestSources {
-                    declared: &project_manifests,
-                    injected: None,
-                },
-                config: &config,
-                catalogs: &catalogs,
-                pnpmfile_hook: None,
-                scope: super::FreshnessScope {
-                    ignore_manifest_check: false,
-                    allow_missing_dependency_free_importers: false,
-                    frozen_lockfile: false,
-                    prune_stale_importers: true,
-                    patches_only: false,
-                    locked_registries: None,
-                },
-            },
-        })
-        .await
+    let updated = fast_update(&lockfile, &manifest, &config, None).await
         .expect("the removal is absorbed once `foo` reads as its override");
 
-    let snapshots = updated.snapshots.expect("snapshots");
-    let keys: Vec<_> = snapshots
-        .keys()
-        .map(ToString::to_string)
-        .collect();
-    assert_eq!(keys, vec!["foo@2.0.0".to_string()]);
+    assert_eq!(sorted_snapshot_keys(&updated), ["foo@2.0.0"]);
+}
+
+/// `foo` and the `bar` it depends on, locked once each.
+const BUMPABLE_LOCKFILE: &str = r"
+lockfileVersion: '9.0'
+importers:
+  .:
+    dependencies:
+      foo:
+        specifier: ^1.0.0
+        version: 1.1.0
+      bar:
+        specifier: ^1.0.0
+        version: 1.0.0
+packages:
+  foo@1.1.0:
+    resolution:
+      integrity: sha512-foo
+  bar@1.0.0:
+    resolution:
+      integrity: sha512-bar
+snapshots:
+  foo@1.1.0:
+    dependencies:
+      bar: 1.0.0
+  bar@1.0.0: {}
+";
+
+/// Bump `foo` to `^1.2.0`, a range the lockfile holds no version of, against a
+/// registry that serves `foo` 1.2.0 depending on `bar`.
+async fn fast_update_bump_of_foo(http_client: Option<Arc<ThrottledClient>>) -> Option<Lockfile> {
+    let mut server = mockito::Server::new_async().await;
+    let registry = format!("{}/", server.url());
+    let packument = json!({
+        "name": "foo",
+        "dist-tags": { "latest": "1.2.0" },
+        "versions": {
+            "1.2.0": {
+                "name": "foo",
+                "version": "1.2.0",
+                "dependencies": { "bar": "^1.0.0" },
+                "dist": {
+                    "integrity": "sha512-dGFyZ2V0LTI=",
+                    "tarball": format!("{registry}foo/-/foo-1.2.0.tgz"),
+                },
+            },
+        },
+    });
+    let _packument = server
+        .mock("GET", "/foo")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(packument.to_string())
+        .create_async()
+        .await;
+    let cache = tempdir().expect("create cache dir");
+    let mut config = Config::new();
+    config.registry = registry;
+    config.minimum_release_age = None;
+    config.cache_dir = cache.path().join("cache");
+    config.ignore_pnpmfile = true;
+    let manifest = PackageManifest::from_value(
+        PathBuf::from("/project/package.json"),
+        json!({ "name": "root", "dependencies": { "foo": "^1.2.0", "bar": "^1.0.0" } }),
+    );
+    let lockfile: Lockfile = serde_saphyr::from_str(BUMPABLE_LOCKFILE).expect("parse lockfile");
+
+    fast_update(&lockfile, &manifest, &config, http_client).await
+}
+
+#[tokio::test]
+async fn fast_update_absorbs_a_bump_to_a_version_the_lockfile_never_held() {
+    let updated = fast_update_bump_of_foo(Some(Arc::new(ThrottledClient::default())))
+        .await
+        .expect("the update looks the new version up through the client");
+
+    assert_eq!(sorted_snapshot_keys(&updated), ["bar@1.0.0", "foo@1.2.0"]);
+}
+
+#[tokio::test]
+async fn fast_update_without_a_client_leaves_a_bump_to_a_new_version_to_the_full_resolution() {
+    assert!(fast_update_bump_of_foo(None).await.is_none());
 }

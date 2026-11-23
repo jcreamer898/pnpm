@@ -278,7 +278,7 @@ fn alias_divergence(
     if recorded_in == target { AliasDivergence::Clean } else { AliasDivergence::Diverged }
 }
 
-fn importer_dependency<'a>(
+pub(crate) fn importer_dependency<'a>(
     importer: &'a ProjectSnapshot,
     alias: &PkgName,
 ) -> Option<(DependencyGroup, &'a ResolvedDependencySpec)> {

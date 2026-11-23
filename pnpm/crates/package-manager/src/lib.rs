@@ -67,6 +67,7 @@ mod fast_update_compose;
 mod fast_update_ignored_optional_dependencies;
 mod fast_update_importers;
 mod fast_update_lockfile;
+mod fast_update_new_versions;
 mod fast_update_overrides;
 mod fast_update_patched_dependencies;
 mod fast_update_settings;

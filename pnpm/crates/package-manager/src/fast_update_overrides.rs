@@ -1,8 +1,10 @@
-pub(crate) use planning::{FastOverride, build_replacement_plan, get_peer_names};
+pub(crate) use planning::{
+    FastOverride, build_replacement_plan, get_peer_names, is_safe_registry_result, package_metadata,
+};
 
 mod planning;
 
-use planning::{ResolvedOverride, build_rewrite_plan, package_metadata, resolve_override};
+use planning::{ResolvedOverride, build_rewrite_plan, resolve_override};
 
 use futures_util::future::join_all;
 use indexmap::IndexMap;
@@ -303,7 +305,7 @@ fn override_applies_to(override_entry: &FastOverride, parent_key: Option<&Packag
     }
 }
 
-fn validate_dependencies(
+pub(crate) fn validate_dependencies(
     manifest_dependencies: HashMap<PkgName, String>,
     locked_dependencies: Option<&HashMap<PkgName, SnapshotDepRef>>,
     snapshots: &HashMap<PackageKey, SnapshotEntry>,
@@ -409,7 +411,7 @@ fn snapshot_is_reusable(snapshot: &SnapshotEntry) -> bool {
         && snapshot.transitive_peer_dependencies.is_none()
 }
 
-fn effective_dependencies(manifest: &Value) -> Option<HashMap<PkgName, String>> {
+pub(crate) fn effective_dependencies(manifest: &Value) -> Option<HashMap<PkgName, String>> {
     let optional = manifest_dependency_map(manifest, "optionalDependencies")?;
     Some(
         manifest_dependency_map(manifest, "dependencies")?
@@ -419,7 +421,10 @@ fn effective_dependencies(manifest: &Value) -> Option<HashMap<PkgName, String>> 
     )
 }
 
-fn manifest_dependency_map(manifest: &Value, key: &str) -> Option<HashMap<PkgName, String>> {
+pub(crate) fn manifest_dependency_map(
+    manifest: &Value,
+    key: &str,
+) -> Option<HashMap<PkgName, String>> {
     let Some(value) = manifest.get(key) else {
         return Some(HashMap::new());
     };

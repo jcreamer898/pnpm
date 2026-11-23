@@ -315,7 +315,7 @@ pub(super) fn all_dependency_keys(lockfile: &Lockfile) -> Vec<(&PkgName, Option<
         });
     importer_keys.chain(snapshot_keys).collect()
 }
-pub(super) fn is_safe_registry_result(
+pub(crate) fn is_safe_registry_result(
     result: &ResolveResult,
     manifest: &Value,
     name: &str,
@@ -352,7 +352,7 @@ pub(super) fn is_safe_registry_result(
                 if tarball.integrity.is_some() && tarball.git_hosted != Some(true),
         )
 }
-pub(super) fn package_metadata(
+pub(crate) fn package_metadata(
     manifest: &Value,
     resolution: LockfileResolution,
 ) -> PackageMetadata {

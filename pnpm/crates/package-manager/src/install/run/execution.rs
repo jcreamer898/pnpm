@@ -1,7 +1,7 @@
 use super::{
     super::{
-        ApplyMaterializationInputs, AtomicU8, InstallError, MaterializationInputs, PackageManifest,
-        PathBuf, Reporter, apply_materialization_result, materialize,
+        ApplyMaterializationInputs, Arc, AtomicU8, InstallError, MaterializationInputs,
+        PackageManifest, PathBuf, Reporter, apply_materialization_result, materialize,
     },
     Dispatched, InstallRunOutcome, InstallScope, Loaded, Lockfiles, RepeatInstallVerdict,
     RunExecution, Verification,
@@ -75,11 +75,11 @@ impl<'a> RunExecution<'a> {
         let mut lockfiles = settle_wanted_lockfile::<Reporter>(
             self.install,
             &self.mode,
-            &self.workspace,
-            &scope,
+            (&self.workspace, &scope),
             &loaded,
             &project_manifests,
             self.options.selection.as_ref(),
+            Some(Arc::clone(&self.owned.http_client_arc)),
         )
         .await?;
         Box::pin(self.install_settled::<Reporter>(

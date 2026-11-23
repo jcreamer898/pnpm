@@ -21,6 +21,7 @@ pub(crate) use settings::{
 
 mod directory_manifests;
 mod normalized_manifests;
+mod seeded;
 
 use rayon::prelude::*;
 
@@ -29,6 +30,7 @@ use super::{
     build_project_manifests_list, configured_or_discovered_workspace_dir,
 };
 use normalized_manifests::{compared_manifests, override_normalized_manifests};
+use seeded::seed_never_locked_versions;
 
 /// Inputs for [`wanted_lockfile_satisfies_workspace`].
 pub struct WantedLockfileSatisfactionCheck<'a> {
@@ -212,6 +214,9 @@ pub(super) struct FastUpdateLockfileOptions<'a, 'manifest> {
     pub(super) lockfile: Option<&'a Lockfile>,
     pub(super) project_manifests: &'a [(PathBuf, &'manifest PackageManifest)],
     pub(super) freshness: LockfileFreshnessInputs<'a, 'manifest>,
+    /// The client the registry lookups of a never-locked version go through.
+    /// `None` keeps the fast update to versions the lockfile already holds.
+    pub(super) http_client: Option<Arc<pnpm_network::ThrottledClient>>,
 }
 
 /// Rewrite the loaded lockfile in place of a full resolution for the
@@ -242,8 +247,11 @@ pub(super) async fn try_fast_update_lockfile<Reporter: pnpm_reporter::Reporter>(
     let overrider = settings::freshness_overrider(&opts.freshness, parsed_overrides.as_deref());
     let normalized = override_normalized_manifests(opts.freshness.manifests, overrider.as_deref());
     let manifests = compared_manifests(opts.freshness.manifests, normalized.as_deref());
+    // A bump or an addition can ask for a registry version the lockfile has
+    // never held; seeding it lets the compose retarget the importers.
+    let seeded = seed_never_locked_versions(&opts, lockfile, &manifests, overrider).await;
     let candidate = crate::fast_update_compose::try_compose_fast_updates(
-        lockfile,
+        seeded.as_ref().unwrap_or(lockfile),
         &manifests,
         opts.project_manifests,
         opts.freshness.config,

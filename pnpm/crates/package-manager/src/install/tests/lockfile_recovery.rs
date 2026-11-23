@@ -35,10 +35,12 @@ async fn stale_lockfile_under_no_flag_falls_through_to_fresh_resolve() {
     manifest.save().unwrap();
 
     let mut registry = mockito::Server::new_async().await;
+    // The fast update looks the new version up once, then the fresh resolution
+    // it falls through to makes its three attempts.
     let failed_request = registry
         .mock("GET", "/@pnpm.e2e%2Fhello-world-js-bin")
         .with_status(503)
-        .expect(3)
+        .expect(4)
         .create_async()
         .await;
     let mut config = Config::new();
