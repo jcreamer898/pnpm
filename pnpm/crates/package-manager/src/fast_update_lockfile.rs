@@ -30,7 +30,14 @@ pub(crate) struct GraphEdits {
 /// resolved manifest version instead — which makes every suffix naming
 /// that name suspect.
 #[derive(Default)]
-pub(crate) struct DroppedEdges(HashSet<String>);
+pub(crate) struct DroppedEdges {
+    targets: HashSet<String>,
+    /// The names a severed package is known by: its own, and the alias
+    /// each edge that reaches it declares it under. A peer is looked up
+    /// under its alias, while a suffix that embeds it names the package it
+    /// resolved to.
+    names: HashSet<String>,
+}
 
 /// The `snapshots:` key a dependency record points at, across the
 /// importer-level and snapshot-level reference shapes, so a severed edge
@@ -53,33 +60,38 @@ impl DroppedEdgeTarget for SnapshotDepRef {
 
 impl DroppedEdges {
     pub(crate) fn is_empty(&self) -> bool {
-        self.0.is_empty()
+        self.targets.is_empty()
     }
 
     /// Record the edge from `alias` to `target` as severed.
     pub(crate) fn record(&mut self, alias: &PkgName, target: &impl DroppedEdgeTarget) {
-        let peer_id = match target.resolved_key(alias) {
+        let (peer_id, package_name) = match target.resolved_key(alias) {
             // A peer suffix names an aliased dependency by the package's
             // own name, not by the name it is linked into `node_modules`
             // under; a link has no key to take a name from at all.
-            Some(key) => peer_id_of(&key).unwrap_or_else(|| format!("{}@", key.name)),
-            None => format!("{alias}@"),
+            Some(key) => (peer_id_of(&key).unwrap_or_else(|| format!("{}@", key.name)), key.name),
+            None => (format!("{alias}@"), alias.clone()),
         };
-        self.0.insert(peer_id);
+        self.targets.insert(peer_id);
+        self.names.insert(package_name.to_string());
+        self.names.insert(alias.to_string());
     }
 
     fn contains_package(&self, key: &PkgNameVerPeer) -> bool {
-        self.0.contains(&format!("{}@", key.name))
-            || peer_id_of(key).is_some_and(|peer_id| self.0.contains(&peer_id))
+        self.targets.contains(&format!("{}@", key.name))
+            || peer_id_of(key).is_some_and(|peer_id| self.targets.contains(&peer_id))
     }
 
     /// Whether `peers` — the peer suffix of a snapshot key — names none
     /// of the severed edges' targets, at any nesting depth. Without
     /// `dedupePeers` a peer is named by its whole dep path, and the peers
     /// that path pins are as much a part of the dependent's key as the
-    /// top-level ones. A `patch_hash=` segment names no package; a suffix
-    /// pnpm shortened into a hash names nothing that can be ruled out.
-    fn are_absent_from(&self, peers: &str) -> bool {
+    /// top-level ones. A `patch_hash=` segment names no package.
+    ///
+    /// A suffix pnpm shortened into a hash cannot be read, so it counts as
+    /// absent only when `hashed_suffix_is_independent`: nothing it could
+    /// embed is a severed package.
+    fn are_absent_from(&self, peers: &str, hashed_suffix_is_independent: bool) -> bool {
         peers
             .split(['(', ')'])
             .filter(|peer_id| !peer_id.is_empty() && !peer_id.starts_with("patch_hash="))
@@ -92,9 +104,9 @@ impl DroppedEdges {
                     .map(|(index, _)| index)
                     .find(|index| *index > 0)
                 else {
-                    return false;
+                    return hashed_suffix_is_independent;
                 };
-                !self.0.contains(peer_id) && !self.0.contains(&peer_id[..=separator])
+                !self.targets.contains(peer_id) && !self.targets.contains(&peer_id[..=separator])
             })
     }
 }
@@ -141,12 +153,14 @@ fn peer_contexts_are_independent_of(lockfile: &Lockfile, dropped: &DroppedEdges)
     let Some(snapshots) = lockfile.snapshots.as_ref() else {
         return true;
     };
+    let hashed_suffix_is_independent = dropped.names_are_never_peers_in(lockfile);
     snapshots
         .keys()
         .all(|key| {
             let changes_peer_owner =
                 dropped.contains_package(key) && peer_contexts::has_declared_peers(lockfile, key);
-            !changes_peer_owner && dropped.are_absent_from(key.suffix.peer())
+            !changes_peer_owner
+                && dropped.are_absent_from(key.suffix.peer(), hashed_suffix_is_independent)
         })
 }
 

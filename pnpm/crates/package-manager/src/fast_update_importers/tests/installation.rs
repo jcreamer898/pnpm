@@ -1,8 +1,8 @@
 use super::{
-    WITH_HASHED_PEER_SUFFIX, WITH_PEER_ON_ANOTHER_VERSION, WITH_REMOVABLE_DEP,
-    WITH_SHARED_OPTIONAL_CHILD, WITH_THREE_GROUPS, WITH_TWO_LOCKED_VERSIONS, manifest_from,
-    parsed_lockfile, snapshot_optional, try_fast_update_importers,
-    with_a_bare_snapshot_beside_the_peer_variant, with_a_second_locked_child,
+    WITH_PEER_ON_ANOTHER_VERSION, WITH_REMOVABLE_DEP, WITH_SHARED_OPTIONAL_CHILD,
+    WITH_THREE_GROUPS, WITH_TWO_LOCKED_VERSIONS, manifest_from, parsed_lockfile, snapshot_optional,
+    try_fast_update_importers, with_a_bare_snapshot_beside_the_peer_variant,
+    with_a_second_locked_child,
 };
 use pnpm_config::ResolutionMode::LowestDirect as LOWEST_DIRECT;
 use pnpm_lockfile::PkgName;
@@ -41,19 +41,6 @@ fn drops_a_dependency_the_manifest_no_longer_declares() {
         packages,
         vec!["bar@2.0.0".to_string(), "child@3.0.0".to_string()],
         "the dropped package goes with its subtree, and shared entries stay",
-    );
-}
-#[test]
-fn rejects_dropping_a_dependency_when_a_surviving_suffix_is_hashed() {
-    let manifest = manifest_from(json!({ "dependencies": { "baz": "^4.0.0" } }));
-
-    assert!(
-        try_fast_update_importers(
-            &parsed_lockfile(WITH_HASHED_PEER_SUFFIX),
-            &[(".".to_string(), &manifest)],
-        )
-        .is_none(),
-        "a shortened suffix cannot be checked for the dropped package",
     );
 }
 #[test]

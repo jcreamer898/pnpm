@@ -4,6 +4,8 @@ mod lockfile;
 
 mod catalogs;
 
+mod hashed_suffixes;
+
 mod installation;
 
 mod resolution;
@@ -198,33 +200,6 @@ snapshots:
     dependencies:
       foo: 1.1.0
   bar@2.0.0: {}
-";
-
-/// A surviving snapshot whose peer suffix pnpm shortened into a hash.
-const WITH_HASHED_PEER_SUFFIX: &str = r"
-lockfileVersion: '9.0'
-importers:
-  .:
-    specifiers:
-      foo: ^1.0.0
-      baz: ^4.0.0
-    dependencies:
-      foo:
-        specifier: ^1.0.0
-        version: 1.1.0
-      baz:
-        specifier: ^4.0.0
-        version: 4.0.0(sha256-abcdef)
-packages:
-  foo@1.1.0:
-    resolution:
-      integrity: sha512-foo
-  baz@4.0.0:
-    resolution:
-      integrity: sha512-baz
-snapshots:
-  foo@1.1.0: {}
-  baz@4.0.0(sha256-abcdef): {}
 ";
 
 /// `bar` is a prod dependency reaching `child`; `opt` is an optional
